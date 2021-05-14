@@ -1,0 +1,34 @@
+Description: Create an IAM user. Attach one inline policy to user. Also generate access & secret key
+
+Parameters:
+  UserName:
+    Type: String
+    Description: New IAM user
+    #Default: enter-new-iam-user-name
+  Password:
+    NoEcho: 'true'
+    Type: String
+    Description: IAM User password(Minimum 8 character. one upper case, one lower case, one digit & one special character is mandatory)
+    MinLength: '1'
+    MaxLength: '41'
+    ConstraintDescription: the password must be between 1 and 41 characters
+
+Resources:
+  NewUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: !Ref UserName
+      Path: "/"
+      LoginProfile:
+        Password: !Ref 'Password'
+  AccessKeys:
+    Type: AWS::IAM::AccessKey
+    Properties:
+      UserName: !Ref NewUser
+Outputs:
+  AccessKey:
+    Value: !Ref AccessKeys
+    Description: AWSAccessKeyId of new user
+  SecretKey:
+    Value: !GetAtt [AccessKeys, SecretAccessKey]
+    Description: AWSSecretAccessKey of new user
