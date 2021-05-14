@@ -1,0 +1,125 @@
+Description: Cross-account cross-region s3 bucket replication - original account with source bucket
+
+
+Parameters:
+  1UserName:
+    Type: String
+    Description: New IAM user for uploading data to Source Bucket
+    #Default: enter-new-iam-user-name
+  #2Password:
+    #NoEcho: 'true'
+    #Type: String
+    #Description: IAM User password(Minimum 8 character. one upper case, one lower case, one digit & one special character is mandatory)
+    #MinLength: '1'
+    #MaxLength: '41'
+    #ConstraintDescription: the password must be between 1 and 41 characters
+  2SourceBucket: ## source bucket
+    Type: String
+    Description: Source bucket at original AWS account
+    #Default: enter-source-account-bucket-name
+  3SourceBucketPrefix: ## source bucket
+    Type: String
+    Description: Source bucket prefix for replication
+    #Default: enter-source-account-S3-Bucket-prefix
+  4DestinationBucket: ## destination bucket
+    Type: String
+    Description: Replication bucket at destination AWS account
+    #Default: enter-already-existing-destination-account-bucket-name
+  5AwsAccountIdDestination: ## destination AWS account ID
+    Type: String
+    Description: Destination bucket owner account ID.
+    #Default: AWS account ID of destination account
+
+##  StorageClass: ## By default, Amazon S3 uses the storage class of the source object to create object replica.
+##    Type: String
+##    Description: The storage class to use when replicating objects, such as standard or reduced redundancy.
+##    Default: STANDARD
+##    AllowedValues: [ STANDARD, STANDARD_IA, ONEZONE_IA, REDUCED_REDUNDANCY ]
+##    ## To transition objects to the GLACIER storage class, use lifecycle configuration.
+
+
+Resources:
+  NewUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: !Ref 1UserName
+      Path: "/"
+      #LoginProfile:
+        #Password: !Ref '2Password'
+      Policies:
+      - PolicyName: !Join [ "-", [ "S3BucketAccess", !Ref 2SourceBucket ] ]
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - s3:*
+            Resource:
+            - !Join ['',['arn:aws:s3:::', !Ref 2SourceBucket      ]]
+            - !Join ['',['arn:aws:s3:::', !Ref 2SourceBucket, '/*']]
+  AccessKeys:
+    Type: AWS::IAM::AccessKey
+    Properties:
+      UserName: !Ref NewUser
+  roleReplication:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: s3.amazonaws.com
+          Action: sts:AssumeRole
+      Path: /
+      Policies: ## PolicyName must contain only alphanumeric characters and/or the following: +=,.@_-
+      - PolicyName: cross-account-replication
+        PolicyDocument:
+          Statement:
+          - Effect: Allow
+            Action:
+              - 's3:ListBucket'
+              - 's3:GetReplicationConfiguration'
+              - 's3:GetObjectVersionForReplication'
+              - 's3:GetObjectVersionAcl'
+            Resource: ## source bucket
+              - !Join ['',['arn:aws:s3:::', !Ref 2SourceBucket      ]]
+              - !Join ['',['arn:aws:s3:::', !Ref 2SourceBucket, '/*']]
+          - Effect: Allow
+            Action:
+              - 's3:ReplicateObject'
+              - 's3:ReplicateDelete'
+              - 's3:ReplicateTags'
+              - 's3:GetObjectVersionTagging'
+              - 's3:GetBucketVersioning'
+              - 's3:PutBucketVersioning'
+              - 's3:ObjectOwnerOverrideToBucketOwner'
+            Resource: ## destination bucket
+              - !Join ['',['arn:aws:s3:::', !Ref 4DestinationBucket      ]]
+              - !Join ['',['arn:aws:s3:::', !Ref 4DestinationBucket, '/*']]
+
+  bucketFiles:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref 2SourceBucket
+      VersioningConfiguration:
+        Status: Enabled
+      ReplicationConfiguration:
+        Role: !GetAtt roleReplication.Arn
+        Rules: ## Destination bucket must exist, have versioning enabled and be in a different region than source bucket.
+          - Destination:
+              Bucket: !Join ['',['arn:aws:s3:::', !Ref 4DestinationBucket]]
+              AccessControlTranslation: ## Account is required for AccessControlTranslation
+                Owner: Destination
+              Account: !Ref 5AwsAccountIdDestination
+              ##StorageClass: !Ref StorageClass
+            Id: Rule1
+            Prefix: !Ref 3SourceBucketPrefix
+            Status: Enabled
+Outputs:
+  AccessKey:
+    Value: !Ref AccessKeys
+    Description: AWSAccessKeyId of new user
+  SecretKey:
+    Value: !GetAtt [AccessKeys, SecretAccessKey]
+    Description: AWSSecretAccessKey of new user

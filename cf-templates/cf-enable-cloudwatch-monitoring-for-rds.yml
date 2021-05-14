@@ -1,0 +1,420 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'RDS database instance monitoring'
+Metadata:
+  'AWS::CloudFormation::Interface':
+    ParameterGroups:
+    - Label:
+        default: 'RDS'
+      Parameters:
+      - DBInstanceIdentifier
+    - Label:
+        default: 'Thresholds'
+      Parameters:
+      - DBLoadThreshold
+      - BurstBalanceThreshold
+      - CPUUtilizationThreshold
+      - CPUCreditBalanceThreshold
+      - DiskQueueDepthThreshold
+      - FreeableMemoryThreshold
+      - FreeStorageSpaceThreshold
+      - SwapUsageThreshold
+      - DatabaseConnectionsThreshold
+      - CPUUtilizationWarningThreshold
+Parameters:
+  DBInstanceIdentifier:
+    Description: 'The instance ID of the RDS database instance that you want to monitor.'
+    Type: String
+  DBLoadThreshold:
+    Description: 'The maximum database load, set to number of vCPUs (requires RDS Performance Insights; set to -1 to disable).'
+    Type: Number
+    Default: -1
+    MinValue: -1
+    MaxValue: 128
+  BurstBalanceThreshold:
+    Description: 'The minimum percent of General Purpose SSD (gp2) burst-bucket I/O credits available.'
+    Type: Number
+    Default: 20
+    MinValue: 0
+    MaxValue: 100
+  CPUUtilizationThreshold:
+    Description: 'The maximum percentage of CPU utilization (set to -1 to disable).'
+    Type: Number
+    Default: 80
+    MinValue: -1
+    MaxValue: 100
+  CPUCreditBalanceThreshold:
+    Description: 'The minimum number of CPU credits available (t* instances only; set to -1 to disable).'
+    Type: Number
+    Default: 20
+    MinValue: -1
+  DiskQueueDepthThreshold:
+    Description: 'The maximum number of outstanding IOs (read/write requests) waiting to access the disk (set to -1 to disable).'
+    Type: Number
+    Default: 64
+    MinValue: -1
+  FreeableMemoryThreshold:
+    Description: 'The minimum amount of available random access memory in Byte (set to -1 to disable).'
+    Type: Number
+    Default: 64000000 # 64 Megabyte in Byte
+    MinValue: -1
+  FreeStorageSpaceThreshold:
+    Description: 'The minimum amount of available storage space in Byte (set to -1 to disable).'
+    Type: Number
+    Default: 2000000000 # 2 Gigabyte in Byte
+    MinValue: -1
+  SwapUsageThreshold:
+    Description: 'The maximum amount of swap space used on the DB instance in Byte (set to -1 to disable).'
+    Type: Number
+    Default: 256000000 # 256 Megabyte in Byte
+    MinValue: -1
+  DatabaseConnectionsThreshold:
+    Description: 'The maximum connections  used on the DB instance in Count (set to -1 to disable).'
+    Type: Number
+    Default: 100
+    MinValue: -1
+  WriteLatencyThreshold:
+    Description: 'The write latency occupied on the DB instance in Milliseconds (set to -1 to disable).'
+    Type: Number
+    Default: 150
+    MinValue: -1
+  ReadLatencyThreshold:
+    Description: 'The Read Latency occupied on the DB instance in Milliseconds (set to -1 to disable).'
+    Type: Number
+    Default: 20
+    MinValue: -1
+  CPUUtilizationWarningThreshold:
+    Description: 'The warning percentage of CPU utilization (set to -1 to disable).'
+    Type: Number
+    Default: 70
+    MinValue: -1
+    MaxValue: 100
+Conditions:
+  HasDBLoadThreshold: !Not [!Equals [!Ref DBLoadThreshold, '-1']]
+  HasBurstBalanceThreshold: !Not [!Equals [!Ref BurstBalanceThreshold, '-1']]
+  HasCPUUtilizationThreshold: !Not [!Equals [!Ref CPUUtilizationThreshold, '-1']]
+  HasCPUCreditBalanceThreshold: !Not [!Equals [!Ref CPUCreditBalanceThreshold, '-1']]
+  HasDiskQueueDepthThreshold: !Not [!Equals [!Ref DiskQueueDepthThreshold, '-1']]
+  HasFreeableMemoryThreshold: !Not [!Equals [!Ref FreeableMemoryThreshold, '-1']]
+  HasFreeStorageSpaceThreshold: !Not [!Equals [!Ref FreeStorageSpaceThreshold, '-1']]
+  HasSwapUsageThreshold: !Not [!Equals [!Ref SwapUsageThreshold, '-1']]
+  #HasDatabaseConnectionsThreshold: [!Equals [!Ref DatabaseConnectionsThreshold, '-1']]
+Resources:
+  Topic:
+    Type: 'AWS::SNS::Topic'
+    Properties:
+      TopicName: "rds-notification-topic"
+  TopicPolicy:
+    Type: 'AWS::SNS::TopicPolicy'
+    Properties:
+      PolicyDocument:
+        Id: Id1
+        Version: '2012-10-17'
+        Statement:
+        - Sid: Sid1
+          Effect: Allow
+          Principal:
+            Service:
+            - 'events.amazonaws.com' # Allow CloudWatch Events
+            - 'rds.amazonaws.com' # Allow RDS Events
+          Action: 'sns:Publish'
+          Resource: !Ref Topic
+        - Sid: Sid2
+          Effect: Allow
+          Principal:
+            AWS: '*' # Allow CloudWatch Alarms
+          Action: 'sns:Publish'
+          Resource: !Ref Topic
+          Condition:
+            StringEquals:
+              'AWS:SourceOwner': !Ref 'AWS::AccountId'
+      Topics:
+      - !Ref Topic
+  TopicEndpointSubscription:
+    DependsOn: TopicPolicy
+    Type: 'AWS::SNS::Subscription'
+    Properties:
+      Endpoint: user@example.com
+      Protocol: email
+      TopicArn: !Ref Topic
+  DBLoadTooHighAlarm:
+    Condition: HasDBLoadThreshold
+    #DependsOn: TopicEndpointSubscription
+    Type: 'AWS::CloudWatch::Alarm'
+    Properties:
+      AlarmName: !Join [ "-", [ !Ref DBInstanceIdentifier, "DBLoadTooHighAlarm" ] ]
+      AlarmActions:
+      - !Ref Topic
+      AlarmDescription: 'Average database load was too high over the last 10 minutes'
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+      - Name: DBInstanceIdentifier
+        Value: !Ref DBInstanceIdentifier
+      EvaluationPeriods: 1
+      MetricName: DBLoad
+      Namespace: 'AWS/RDS'
+      OKActions:
+      - !Ref Topic
+      Period: 600
+      Statistic: Average
+      Threshold: !Ref DBLoadThreshold
+      TreatMissingData: notBreaching
+  BurstBalanceTooLowAlarm:
+    Condition: HasBurstBalanceThreshold
+    #DependsOn: TopicEndpointSubscription
+    Type: 'AWS::CloudWatch::Alarm'
+    Properties:
+      AlarmName: !Join [ "-", [ !Ref DBInstanceIdentifier, "BurstBalanceTooLowAlarm" ] ]
+      AlarmActions:
+      - !Ref Topic
+      AlarmDescription: 'Average database storage burst balance over last 10 minutes too low, expect a significant performance drop soon.'
+      ComparisonOperator: LessThanThreshold
+      Dimensions:
+      - Name: DBInstanceIdentifier
+        Value: !Ref DBInstanceIdentifier
+      EvaluationPeriods: 1
+      MetricName: BurstBalance
+      Namespace: 'AWS/RDS'
+      OKActions:
+      - !Ref Topic
+      Period: 600
+      Statistic: Average
+      Threshold: !Ref BurstBalanceThreshold
+      TreatMissingData: notBreaching
+  CPUUtilizationTooHighAlarm:
+    Condition: HasCPUUtilizationThreshold
+    #DependsOn: TopicEndpointSubscription
+    Type: 'AWS::CloudWatch::Alarm'
+    Properties:
+      AlarmName: !Join [ "-", [ !Ref DBInstanceIdentifier, "CPUUtilizationTooHighAlarm" ] ]
+      AlarmActions:
+      - !Ref Topic
+      AlarmDescription: 'Average database CPU utilization over last 5 minutes too high.'
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+      - Name: DBInstanceIdentifier
+        Value: !Ref DBInstanceIdentifier
+      EvaluationPeriods: 1
+      MetricName: CPUUtilization
+      Namespace: 'AWS/RDS'
+      OKActions:
+      - !Ref Topic
+      Period: 300
+      Statistic: Average
+      Threshold: !Ref CPUUtilizationThreshold
+      TreatMissingData: notBreaching
+  CPUUtilizationWarninngAlarm:
+    Condition: HasCPUUtilizationThreshold
+    #DependsOn: TopicEndpointSubscription
+    Type: 'AWS::CloudWatch::Alarm'
+    Properties:
+      AlarmName: !Join [ "-", [ !Ref DBInstanceIdentifier, "CPUUtilizationWarninngAlarm" ] ]
+      AlarmActions:
+      - !Ref Topic
+      AlarmDescription: 'Average database CPU utilization over last 20 minutes too high.'
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+      - Name: DBInstanceIdentifier
+        Value: !Ref DBInstanceIdentifier
+      EvaluationPeriods: 1
+      MetricName: CPUUtilization
+      Namespace: 'AWS/RDS'
+      OKActions:
+      - !Ref Topic
+      Period: 1200
+      Statistic: Average
+      Threshold: !Ref CPUUtilizationWarningThreshold
+      TreatMissingData: notBreaching
+  CPUCreditBalanceTooLowAlarm:
+    Condition: HasCPUCreditBalanceThreshold
+    #DependsOn: TopicEndpointSubscription
+    Type: 'AWS::CloudWatch::Alarm'
+    Properties:
+      AlarmName: !Join [ "-", [ !Ref DBInstanceIdentifier, "CPUCreditBalanceTooLowAlarm" ] ]
+      AlarmActions:
+      - !Ref Topic
+      AlarmDescription: 'Average database CPU credit balance over last 10 minutes too low, expect a significant performance drop soon.'
+      ComparisonOperator: LessThanThreshold
+      Dimensions:
+      - Name: DBInstanceIdentifier
+        Value: !Ref DBInstanceIdentifier
+      EvaluationPeriods: 1
+      MetricName: CPUCreditBalance
+      Namespace: 'AWS/RDS'
+      OKActions:
+      - !Ref Topic
+      Period: 600
+      Statistic: Average
+      Threshold: !Ref CPUCreditBalanceThreshold
+      TreatMissingData: notBreaching
+  DiskQueueDepthTooHighAlarm:
+    Condition: HasDiskQueueDepthThreshold
+    #DependsOn: TopicEndpointSubscription
+    Type: 'AWS::CloudWatch::Alarm'
+    Properties:
+      AlarmName: !Join [ "-", [ !Ref DBInstanceIdentifier, "DiskQueueDepthTooHighAlarm" ] ]
+      AlarmActions:
+      - !Ref Topic
+      AlarmDescription: 'Average database disk queue depth over last 2 minutes too high, performance may suffer.'
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+      - Name: DBInstanceIdentifier
+        Value: !Ref DBInstanceIdentifier
+      EvaluationPeriods: 1
+      MetricName: DiskQueueDepth
+      Namespace: 'AWS/RDS'
+      OKActions:
+      - !Ref Topic
+      Period: 120
+      Statistic: Average
+      Threshold: !Ref DiskQueueDepthThreshold
+      TreatMissingData: notBreaching
+  FreeableMemoryTooLowAlarm:
+    Condition: HasFreeableMemoryThreshold
+    #DependsOn: TopicEndpointSubscription
+    Type: 'AWS::CloudWatch::Alarm'
+    Properties:
+      AlarmName: !Join [ "-", [ !Ref DBInstanceIdentifier, "FreeableMemoryTooLowAlarm" ] ]
+      AlarmActions:
+      - !Ref Topic
+      AlarmDescription: 'Average database freeable memory over last 2 minutes too low, performance may suffer.'
+      ComparisonOperator: LessThanThreshold
+      Dimensions:
+      - Name: DBInstanceIdentifier
+        Value: !Ref DBInstanceIdentifier
+      EvaluationPeriods: 1
+      MetricName: FreeableMemory
+      Namespace: 'AWS/RDS'
+      OKActions:
+      - !Ref Topic
+      Period: 120
+      Statistic: Average
+      Threshold: !Ref FreeableMemoryThreshold
+      TreatMissingData: notBreaching
+  FreeStorageSpaceTooLowAlarm:
+    Condition: HasFreeStorageSpaceThreshold
+    #DependsOn: TopicEndpointSubscription
+    Type: 'AWS::CloudWatch::Alarm'
+    Properties:
+      AlarmName: !Join [ "-", [ !Ref DBInstanceIdentifier, "FreeStorageSpaceTooLowAlarm" ] ]
+      AlarmActions:
+      - !Ref Topic
+      AlarmDescription: 'Average database free storage space over last 10 minutes too low.'
+      ComparisonOperator: LessThanThreshold
+      Dimensions:
+      - Name: DBInstanceIdentifier
+        Value: !Ref DBInstanceIdentifier
+      EvaluationPeriods: 1
+      MetricName: FreeStorageSpace
+      Namespace: 'AWS/RDS'
+      OKActions:
+      - !Ref Topic
+      Period: 600
+      Statistic: Average
+      Threshold: !Ref FreeStorageSpaceThreshold
+      TreatMissingData: notBreaching
+  SwapUsageTooHighAlarm:
+    Condition: HasSwapUsageThreshold
+    #DependsOn: TopicEndpointSubscription
+    Type: 'AWS::CloudWatch::Alarm'
+    Properties:
+      AlarmName: !Join [ "-", [ !Ref DBInstanceIdentifier, "SwapUsageTooHighAlarm" ] ]
+      AlarmActions:
+      - !Ref Topic
+      AlarmDescription: 'Average database swap usage over last 10 minutes too high, performance may suffer.'
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+      - Name: DBInstanceIdentifier
+        Value: !Ref DBInstanceIdentifier
+      EvaluationPeriods: 1
+      MetricName: SwapUsage
+      Namespace: 'AWS/RDS'
+      OKActions:
+      - !Ref Topic
+      Period: 600
+      Statistic: Average
+      Threshold: !Ref SwapUsageThreshold
+      TreatMissingData: notBreaching
+  DatabaseConnectionsTooHighAlarm:
+    #Condition: HasDatabaseConnectionsThreshold
+    #DependsOn: TopicEndpointSubscription
+    Type: 'AWS::CloudWatch::Alarm'
+    Properties:
+      AlarmName: !Join [ "-", [ !Ref DBInstanceIdentifier, "DatabaseConnectionsTooHighAlarm" ] ]
+      AlarmActions:
+      - !Ref Topic
+      AlarmDescription: 'Average database connections over last 5 minutes too high, performance may suffer.'
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+      - Name: DBInstanceIdentifier
+        Value: !Ref DBInstanceIdentifier
+      EvaluationPeriods: 1
+      MetricName: DatabaseConnections
+      Namespace: 'AWS/RDS'
+      OKActions:
+      - !Ref Topic
+      Period: 300
+      Statistic: Average
+      Threshold: !Ref DatabaseConnectionsThreshold
+      TreatMissingData: notBreaching
+  ReadLatencyTooHighAlarm:
+    #Condition: HasDatabaseConnectionsThreshold
+    #DependsOn: TopicEndpointSubscription
+    Type: 'AWS::CloudWatch::Alarm'
+    Properties:
+      AlarmName: !Join [ "-", [ !Ref DBInstanceIdentifier, "ReadLatency" ] ]
+      AlarmActions:
+      - !Ref Topic
+      AlarmDescription: 'Average database connections over last 2 minutes too high, performance may suffer.'
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+      - Name: DBInstanceIdentifier
+        Value: !Ref DBInstanceIdentifier
+      EvaluationPeriods: 1
+      MetricName: DatabaseConnections
+      Namespace: 'AWS/RDS'
+      OKActions:
+      - !Ref Topic
+      Period: 120
+      Statistic: Average
+      Threshold: !Ref ReadLatencyThreshold
+      TreatMissingData: notBreaching
+  WriteLatencyTooHighAlarm:
+    #Condition: HasDatabaseConnectionsThreshold
+    #DependsOn: TopicEndpointSubscription
+    Type: 'AWS::CloudWatch::Alarm'
+    Properties:
+      AlarmName: !Join [ "-", [ !Ref DBInstanceIdentifier, "WriteLatency" ] ]
+      AlarmActions:
+      - !Ref Topic
+      AlarmDescription: 'Average Write Latency  over last 2 minutes too high, performance may suffer.'
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+      - Name: DBInstanceIdentifier
+        Value: !Ref DBInstanceIdentifier
+      EvaluationPeriods: 1
+      MetricName: DatabaseConnections
+      Namespace: 'AWS/RDS'
+      OKActions:
+      - !Ref Topic
+      Period: 120
+      Statistic: Average
+      Threshold: !Ref WriteLatencyThreshold
+      TreatMissingData: notBreaching
+  EventSubscription:
+    #DependsOn: TopicEndpointSubscription
+    Type: 'AWS::RDS::EventSubscription'
+    Properties:
+      SnsTopicArn: !Ref Topic
+      SourceIds: [!Ref DBInstanceIdentifier]
+      SourceType: 'db-instance'
+Outputs:
+  StackName:
+    Description: 'Stack name.'
+    Value: !Sub '${AWS::StackName}'
+  StackTemplate:
+    Description: 'Stack template.'
+    Value: 'cf-enable-cloudwatch-monitoring-for-rds'
+  StackVersion:
+    Description: 'Stack version.'
+    Value: '1.5.1'
